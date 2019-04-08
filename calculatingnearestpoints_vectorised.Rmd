@@ -1,0 +1,111 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Calculating distances - and the nearest point
+
+This is an adaptation of the BBC Data unit's "Electric Car Charging Points" analysis. That analysis contains a great deal more explanation on the basics of that analysis and exactly what they are trying to achieve. This analysis will only briefly explain what's going on.
+
+This is a vectorised version of that (R typically works much faster when calculations can be performed across vectors rather than for-looped on single values).
+
+For more detailed discussion refer back to that git [project.](https://github.com/BBC-Data-Unit/electric-car-charging-points)
+
+The first stage is to load the location data and also create a function for the [Haversine equation](https://en.wikipedia.org/wiki/Haversine_formula). This function can produce vectorised results.
+
+```{r}
+#Read in the data
+locations <- read.csv("locations.csv")
+
+#homemade haversine formula, can produce vectorised results
+haversine<-function(long1,long2,lat1,lat2){
+  long1<-long1*2*pi/360
+  long2<-long2*2*pi/360
+  lat1<-lat1*2*pi/360
+  lat2<-lat2*2*pi/360
+  earthrad=6371000
+  dellat=lat2-lat1
+  dellong=long2-long1
+  a=sin(dellat/2)**2 + cos(lat1)*cos(lat2)*(sin(dellong/2)**2)
+  c=2*atan2(sqrt(a),sqrt(1-a))
+  d=earthrad*c
+  return(d)
+}
+```
+
+## Looping through the coordinates
+The basic idea here is to find the minimal distance from one charging point to any other charging point. The technique in the original analysis is to cycle through all possible charge points and maintain an updated list of the minimum distance plus the charge point this refers to.
+
+Here, we calculate all distances from a single chargepoint to all other chargepoints using the vectorised Haversine function. Then, we filter out the chargepoints that are under or equal to a certain distance (0 m for instance). This solves the problem of the minimum distance for a chargepoint being to itself. 
+
+We can also increase this distance if we want to ignore chargepoints that are within 100m (say). It could be argued that a Local Authority which has dozens of chargepoints within 1km of each other has a poorer infrastructure than a Local Authority with ten charge points evenly spread across the entire area.
+
+
+```{r}
+#Set an arbitrary value to compare against first
+closestdistance <- 0
+#Loop through all the numbers from 2 to the length of the Latitude column (7052)
+
+l<-length(locations$Latitude)
+result<-c()
+for(i in 1:l){
+havdist<-haversine(locations$Longitude[i],locations$Longitude[1:l],
+                   locations$Latitude[i],locations$Latitude[1:l])
+havdist[havdist<=closestdistance]<-1e6
+s<-which.min(havdist)[1]
+result<-rbind(result,data.frame(id=i,nearest_point=s,nearest_distance=havdist[s]))
+
+}
+
+```
+
+This has produced a data-frame, "result", which has 7052 rows, with the chargepoint id "from", chargepoint id "to" and the nearest distance.
+
+This is then added to the original data.
+
+```{r}
+#Add the nearest distances as a column
+locations$nearestdistance <- result$nearest_distances
+#These indexes will be useful because the exported file will include an index column
+locations$nearestplaceindex <- result$nearest_point
+```
+
+The "nearestplaceindex" can be used to generate extra columns giving more data on the closest charging point. Again, this is done in a single step using R's vector capabilities. 
+
+```{r}
+#directly create each column using the nearestplaceindex
+
+locations$nearestid <- locations$AddressInfo...ID[locations$nearestplaceindex]
+locations$nearestname <- locations$Location.of.Charging.Point[locations$nearestplaceindex]
+locations$closestlat <- locations$Latitude[locations$nearestplaceindex]
+locations$closestlng <- locations$Longitude[locations$nearestplaceindex]
+
+```
+
+## Export the results!
+
+Now we export the updated data, and hope that it looks the same as the BBC result!
+```{r}
+write.csv(locations,"locationanalysis_updated.csv")
+locations_bbc<-read.csv(file="locationanalysis.csv",sep=',',header=T,stringsAsFactors = F)
+```
+
+If this has given the same result then comparing the nearest_id should be the same in both tables. A table comparing the two results will give no "False" results.
+
+```{r}
+table(locations$nearestid==locations_bbc$nearestid)
+```
+
+So, we have one aberrant result... We can find out which one it is and look at the raw data to see if it's a likely problem with our analysis or the data set.
+
+```{r}
+#find which location is causing the problem
+s<-which(!locations$nearestid==locations_bbc$nearestid)
+locations[s,]
+```
+
+Judging by the lattitude and longitude, the issue appears to be that this chargepoint is not actually in Leeds, but is off the west coast of Africa. 
+
+All of which highlights the importance of good data cleansing, before relying on the results of any anaylsis.
